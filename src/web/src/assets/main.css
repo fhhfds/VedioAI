@@ -1,11 +1,13 @@
 :root {
-  --bg: #f4f6f8;
+  --bg: #f3f2f8;
+  --stage: #191730;
+  --time-marker: #ffb224;
   --panel: #ffffff;
-  --text: #17212b;
-  --muted: #667085;
-  --line: #dde3ea;
-  --accent: #2563eb;
-  --accent-soft: #eaf0ff;
+  --text: #1e1b33;
+  --muted: #5d5974;
+  --line: #e4e2ec;
+  --accent: #5b45f0;
+  --accent-soft: #efebff;
   --ok: #087443;
   --error: #b42318;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
@@ -33,6 +35,11 @@ a {
 
 button {
   font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .page {

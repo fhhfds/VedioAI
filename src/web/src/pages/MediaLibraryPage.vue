@@ -34,7 +34,7 @@ async function runCheck() {
       <p class="eyebrow">P1 开发骨架</p>
       <h1>素材库</h1>
       <p class="lead">
-        素材上传、私有播放与列表将在 P2 接入。当前页面只验证前端、代理与 Java 后端的基本连接。
+        素材上传、私有播放与列表将在 P3 接入。当前页面只验证前端、代理与 Java 后端的基本连接。
       </p>
     </header>
 
@@ -61,7 +61,7 @@ async function runCheck() {
 
       <article class="card empty">
         <h2>素材列表</h2>
-        <p>当前为空。真实素材、上传与私有播放入口待 P2 接入。</p>
+        <p>素材库将在 P3 接入真实数据。</p>
       </article>
     </div>
   </section>
