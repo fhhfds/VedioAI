@@ -24,7 +24,7 @@ export const authEndpoints = {
 type Role = 'USER' | 'ADMIN'
 type UserStatus = 'ACTIVE' | 'DISABLED'
 
-interface AuthPolicy {
+export interface AuthPolicy {
   registrationEnabled: boolean
   passwordMinCodePoints: number
   passwordMaxCodePoints: number
@@ -36,7 +36,7 @@ interface AuthPolicy {
   maxSessions: number
 }
 
-interface ChallengeReceipt {
+export interface ChallengeReceipt {
   challengeId: string
   expiresIn: number
   resendAfter: number
@@ -52,7 +52,7 @@ interface AdminUser {
   createdAt: string
 }
 
-type AccountUser = Omit<AdminUser, 'emailLabel'> & {
+export type AccountUser = Omit<AdminUser, 'emailLabel'> & {
   email: string
   emailVerified: boolean
   permissions: string[]
@@ -118,4 +118,91 @@ export interface AuthErrorResponse {
     details: Record<string, unknown> | null
   }
   traceId: string
+}
+
+interface AuthEnvelope<T> {
+  data: T
+  traceId: string
+}
+
+export class AuthApiError extends Error {
+  readonly status: number
+  readonly code: string
+  readonly details: Record<string, unknown> | null
+
+  constructor(status: number, code: string, message: string, details: Record<string, unknown> | null = null) {
+    super(message)
+    this.name = 'AuthApiError'
+    this.status = status
+    this.code = code
+    this.details = details
+  }
+}
+
+async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers || {})
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
+
+  let response: Response
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      headers,
+    })
+  } catch {
+    throw new AuthApiError(0, 'NETWORK_ERROR', '无法连接后端服务，请确认后端已启动')
+  }
+
+  const text = await response.text()
+  let payload: unknown = null
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch {
+    // The server may return an empty body for 204 responses.
+  }
+
+  if (!response.ok) {
+    const error = (payload as AuthErrorResponse | null)?.error
+    throw new AuthApiError(
+      response.status,
+      error?.code || 'REQUEST_FAILED',
+      error?.message || `请求失败（HTTP ${response.status}）`,
+      error?.details || null,
+    )
+  }
+
+  return (payload as AuthEnvelope<T>)?.data
+}
+
+export function fetchAuthPolicy(): Promise<AuthPolicy> {
+  return authRequest<AuthPolicy>('/api/auth/policy')
+}
+
+export function fetchCsrf(): Promise<{ headerName: string; token: string }> {
+  return authRequest<{ headerName: string; token: string }>('/api/auth/csrf')
+}
+
+export async function requestRegistrationChallenge(email: string): Promise<ChallengeReceipt> {
+  const csrf = await fetchCsrf()
+  return authRequest<ChallengeReceipt>('/api/auth/registration-challenges', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [csrf.headerName]: csrf.token,
+    },
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function registerAccount(input: RequestBodies['register']): Promise<AccountUser> {
+  const csrf = await fetchCsrf()
+  return authRequest<AccountUser>('/api/auth/registrations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [csrf.headerName]: csrf.token,
+    },
+    body: JSON.stringify(input),
+  })
 }

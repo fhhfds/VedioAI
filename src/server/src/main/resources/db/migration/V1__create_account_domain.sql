@@ -1,0 +1,213 @@
+-- VedioAI auth domain schema V1: 10 business tables. Fixed role seed is in V3.
+
+CREATE TABLE `auth_user` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `user_uid` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'API userId、CurrentActor及素材owner_id来源；服务端生成长度不超过64',
+  `email_norm` VARCHAR(254) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '首版ASCII邮箱，trim后整体小写的登录/唯一值',
+  `email_display` VARCHAR(254) NOT NULL COMMENT '接受时的显示邮箱；不用于唯一判断',
+  `nickname` VARCHAR(64) NOT NULL COMMENT '纯文本昵称',
+  `status` VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE或DISABLED',
+  `auth_version` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '改密/重置/全退/角色或状态变化递增',
+  `version` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '资料和管理写入的expectedVersion依据',
+  `email_verified_at` DATETIME(3) NOT NULL COMMENT '本次邮箱控制权确认时间',
+  `last_login_at` DATETIME(3) NULL DEFAULT NULL COMMENT '最近完成凭据校验并发起会话的时间',
+  `disabled_at` DATETIME(3) NULL DEFAULT NULL COMMENT '停用时间；启用时清空',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_user_uid` (user_uid),
+  UNIQUE KEY `uk_auth_user_email` (email_norm),
+  KEY `ix_auth_user_created` (created_at DESC, id DESC),
+  KEY `ix_auth_user_status` (status, created_at DESC, id DESC),
+  CONSTRAINT `ck_auth_user_state` CHECK (status IN ('ACTIVE','DISABLED')),
+  CONSTRAINT `ck_auth_user_version` CHECK (auth_version > 0 AND version > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='已验证用户';
+
+CREATE TABLE `auth_password_credential` (
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户内部主键',
+  `password_hash` VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '含DelegatingPasswordEncoder标识的完整慢哈希；不返回API',
+  `credential_version` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '改密、重置或重哈希CAS版本',
+  `password_changed_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '实际密码变更时间',
+  `hash_upgraded_at` DATETIME(3) NULL DEFAULT NULL COMMENT '仅算法/参数升级时间',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (user_id),
+  CONSTRAINT `fk_auth_password_user` FOREIGN KEY (`user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_auth_credential_version` CHECK (credential_version > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='密码凭据';
+
+CREATE TABLE `auth_role` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `role_code` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'USER或ADMIN',
+  `label` VARCHAR(64) NOT NULL COMMENT '显示名称',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_role_code` (role_code),
+  CONSTRAINT `ck_auth_role_code` CHECK (role_code IN ('USER','ADMIN'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='固定角色';
+
+CREATE TABLE `auth_user_role` (
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '目标用户',
+  `role_id` BIGINT UNSIGNED NOT NULL COMMENT '固定角色',
+  `assigned_by_user_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '执行分配的管理员；本机引导可NULL',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '分配时间',
+  PRIMARY KEY (user_id, role_id),
+  KEY `ix_auth_user_role_role` (role_id, user_id),
+  KEY `ix_auth_user_role_actor` (assigned_by_user_id),
+  CONSTRAINT `fk_auth_ur_user` FOREIGN KEY (`user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_auth_ur_role` FOREIGN KEY (`role_id`) REFERENCES `auth_role` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_auth_ur_actor` FOREIGN KEY (`assigned_by_user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='用户角色关系';
+
+CREATE TABLE `auth_session_guard` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `session_uid` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'API展示/撤销目标ID，不是Cookie值',
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '当前用户',
+  `session_id_sha256` BINARY(32) NOT NULL COMMENT '框架HttpSession.getId的SHA256；不再存第二份原ID',
+  `auth_version` BIGINT UNSIGNED NOT NULL COMMENT '登录时用户auth_version快照',
+  `status` VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/ACTIVE/REVOKED/EXPIRED',
+  `authenticated_at` DATETIME(3) NOT NULL COMMENT '凭据校验通过时间',
+  `activated_at` DATETIME(3) NULL DEFAULT NULL COMMENT '框架会话可用后的首次请求激活时间',
+  `pending_expires_at` DATETIME(3) NOT NULL COMMENT 'PENDING占位到期，建议2分钟',
+  `absolute_expires_at` DATETIME(3) NOT NULL COMMENT '绝对到期，建议12小时，不随访问无限延期',
+  `last_reauth_at` DATETIME(3) NULL DEFAULT NULL COMMENT '本会话最近密码证明时间；初次登录可赋authenticated_at',
+  `last_seen_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '展示用途，可节流更新；闲置超时真源仍为框架',
+  `user_agent_label` VARCHAR(160) NOT NULL COMMENT '受限长度的系统/浏览器摘要，不信任原UA为HTML',
+  `ip_prefix` VARCHAR(64) NOT NULL COMMENT '脱敏来源前缀',
+  `revoked_at` DATETIME(3) NULL DEFAULT NULL COMMENT '撤销时间',
+  `revocation_reason` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT 'LOGOUT/REVOKE/ALL/PASSWORD/ROLE/STATUS等',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_guard_uid` (session_uid),
+  UNIQUE KEY `uk_auth_guard_hash` (session_id_sha256),
+  KEY `ix_auth_guard_user` (user_id, status, absolute_expires_at, id),
+  KEY `ix_auth_guard_pending` (status, pending_expires_at, id),
+  CONSTRAINT `fk_auth_guard_user` FOREIGN KEY (`user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_auth_guard_state` CHECK (status IN ('PENDING','ACTIVE','REVOKED','EXPIRED')),
+  CONSTRAINT `ck_auth_guard_version` CHECK (auth_version > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='设备与会话撤销账本';
+
+CREATE TABLE `auth_challenge_channel` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `purpose` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'REGISTER或RESET',
+  `email_norm` VARCHAR(254) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范化目的邮箱',
+  `browser_binding_mac` BINARY(32) NOT NULL COMMENT '匿名浏览器会话的受保护绑定',
+  `generation` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '每次真正创建新挑战递增；旧代次不可消费',
+  `next_send_at` DATETIME(3) NOT NULL COMMENT '本通道下次可发送时间',
+  `expires_at` DATETIME(3) NOT NULL COMMENT '通道清理边界，不早于有效挑战/关联保留期',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_channel_scope` (purpose, email_norm, browser_binding_mac),
+  KEY `ix_auth_channel_expire` (expires_at, id),
+  CONSTRAINT `ck_auth_channel_purpose` CHECK (purpose IN ('REGISTER','RESET'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='验证码通道与重发代次';
+
+CREATE TABLE `auth_verification_challenge` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `challenge_uid` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'API challengeId',
+  `purpose` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'REGISTER或RESET',
+  `email_norm` VARCHAR(254) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本次目的邮箱，完成时从此取值而非再信客户端',
+  `channel_id` BIGINT UNSIGNED NOT NULL COMMENT '本挑战所属通道',
+  `generation` BIGINT UNSIGNED NOT NULL COMMENT '创建时通道代次快照；最终消费时与通道核对',
+  `subject_user_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'RESET可关联用户；注册/不可用占位可NULL',
+  `issued_auth_version` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'RESET发出时的版本；后续改密后此码失效',
+  `eligible` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '内部是否可完成本次目的；不返回客户端',
+  `otp_mac` BINARY(32) NOT NULL COMMENT 'HMAC(purpose/challenge/email/code)',
+  `mac_key_id` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '外部HMAC密钥版本',
+  `browser_binding_mac` BINARY(32) NOT NULL COMMENT '与发起时匿名Session绑定',
+  `attempt_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '错误验证码次数',
+  `max_attempts` SMALLINT UNSIGNED NOT NULL DEFAULT 5 COMMENT '单挑战错误上限建议5',
+  `status` VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/USED/INVALIDATED/EXPIRED',
+  `version` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '验证码消费/失效CAS版本',
+  `expires_at` DATETIME(3) NOT NULL COMMENT '码固定到期，不因错误尝试延长',
+  `used_at` DATETIME(3) NULL DEFAULT NULL COMMENT '成功消费时刻',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_challenge_uid` (challenge_uid),
+  KEY `ix_auth_challenge_binding` (email_norm, purpose, browser_binding_mac, status, created_at),
+  KEY `ix_auth_challenge_user` (subject_user_id, purpose, status),
+  KEY `ix_auth_challenge_expire` (status, expires_at, id),
+  CONSTRAINT `fk_auth_challenge_user` FOREIGN KEY (`subject_user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_auth_challenge_channel` FOREIGN KEY (`channel_id`) REFERENCES `auth_challenge_channel` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_auth_challenge_purpose` CHECK (purpose IN ('REGISTER','RESET')),
+  CONSTRAINT `ck_auth_challenge_state` CHECK (status IN ('PENDING','USED','INVALIDATED','EXPIRED')),
+  CONSTRAINT `ck_auth_challenge_count` CHECK (max_attempts > 0 AND attempt_count <= max_attempts AND version > 0 AND generation > 0),
+  CONSTRAINT `ck_auth_challenge_eligible` CHECK (eligible IN (0,1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='邮箱单次验证挑战';
+
+CREATE TABLE `auth_mail_outbox` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `message_key` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '唯一邮件业务身份，例如challenge+template',
+  `challenge_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '验证码邮件关联挑战；安全通知可空',
+  `recipient_email_norm` VARCHAR(254) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '收件邮箱，不用来拼未经校验的SMTP头',
+  `template_code` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'REGISTER_CODE/RESET_CODE/SECURITY_NOTICE',
+  `payload_cipher` VARBINARY(4096) NULL DEFAULT NULL COMMENT '加密模板参数，成功/过期后清除',
+  `cipher_nonce` BINARY(12) NULL DEFAULT NULL COMMENT 'AES-GCM独立随机nonce',
+  `cipher_key_id` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '外部加密密钥版本',
+  `status` VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/SENDING/SENT/FAILED/EXPIRED',
+  `attempt_no` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '实际发送尝试数',
+  `max_attempts` SMALLINT UNSIGNED NOT NULL DEFAULT 5 COMMENT '发送上限建议5',
+  `next_run_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '下次允许派发时间',
+  `execution_id` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '派发执行身份',
+  `fence_token` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '领取代次',
+  `lease_owner` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '派发器实例',
+  `lease_until` DATETIME(3) NULL DEFAULT NULL COMMENT '派发租约到期',
+  `expires_at` DATETIME(3) NOT NULL COMMENT '不晚于码/通知用途的有效窗口',
+  `sent_at` DATETIME(3) NULL DEFAULT NULL COMMENT '供应商确认受理时刻，不等同用户收到',
+  `last_error_code` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '脱敏供应商错误分类',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'UTC创建时间',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'UTC最后修改',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_mail_key` (message_key),
+  KEY `ix_auth_mail_claim` (status, next_run_at, id),
+  KEY `ix_auth_mail_challenge` (challenge_id),
+  KEY `ix_auth_mail_lease` (status, lease_until, id),
+  CONSTRAINT `fk_auth_mail_challenge` FOREIGN KEY (`challenge_id`) REFERENCES `auth_verification_challenge` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_auth_mail_state` CHECK (status IN ('PENDING','SENDING','SENT','FAILED','EXPIRED')),
+  CONSTRAINT `ck_auth_mail_attempt` CHECK (max_attempts > 0),
+  CONSTRAINT `ck_auth_mail_payload` CHECK (status NOT IN ('PENDING','SENDING') OR (payload_cipher IS NOT NULL AND cipher_nonce IS NOT NULL AND cipher_key_id IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='邮件派发Outbox';
+
+CREATE TABLE `auth_rate_bucket` (
+  `scope` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'LOGIN_IP/LOGIN_EMAIL/CODE_MIN/CODE_HOUR等',
+  `subject_key` BINARY(32) NOT NULL COMMENT '规范化主体的HMAC，不存密码/验证码',
+  `window_start` DATETIME(3) NOT NULL COMMENT '数据库时间确定的固定窗口起点',
+  `key_version` VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'HMAC密钥版本',
+  `window_seconds` INT UNSIGNED NOT NULL COMMENT '窗口长度',
+  `request_count` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '本窗口已接受/计入的次数',
+  `blocked_until` DATETIME(3) NULL DEFAULT NULL COMMENT '可选有界冷却，不延长为永久封禁',
+  `expires_at` DATETIME(3) NOT NULL COMMENT '清理时间，晚于限流窗口',
+  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '最后更新',
+  PRIMARY KEY (scope, subject_key, window_start),
+  KEY `ix_auth_rate_expire` (expires_at),
+  CONSTRAINT `ck_auth_rate_window` CHECK (window_seconds > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='共享限流窗口';
+
+CREATE TABLE `auth_audit_event` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '内部自增主键，不返回浏览器',
+  `event_uid` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '安全事件公开/日志关联ID',
+  `actor_user_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '已确认的操作人；未知匿名失败为NULL',
+  `subject_user_id` BIGINT UNSIGNED NULL DEFAULT NULL COMMENT '被影响账号',
+  `session_uid` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '应用会话公开ID，不是Cookie；不强制FK以独立保留审计',
+  `event_type` VARCHAR(48) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'REGISTER/LOGIN/LOGOUT/PASSWORD_RESET/ROLE_CHANGE等',
+  `outcome` VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'SUCCESS/FAILURE/DENIED',
+  `reason_code` VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL DEFAULT NULL COMMENT '公开/受控错误分类',
+  `identifier_hmac` BINARY(32) NULL DEFAULT NULL COMMENT '未知账号输入的脱敏关联值',
+  `ip_prefix` VARCHAR(64) NOT NULL COMMENT '脱敏来源',
+  `user_agent_label` VARCHAR(160) NOT NULL COMMENT '受限长度摘要',
+  `trace_id` VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '请求关联ID',
+  `context_json` JSON NULL DEFAULT NULL COMMENT '仅白名单上下文，如角色前后值；绝无认证秘密',
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '事件时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY `uk_auth_audit_uid` (event_uid),
+  KEY `ix_auth_audit_actor` (actor_user_id, created_at, id),
+  KEY `ix_auth_audit_subject` (subject_user_id, created_at, id),
+  KEY `ix_auth_audit_created` (created_at, id),
+  CONSTRAINT `fk_auth_audit_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `fk_auth_audit_subject` FOREIGN KEY (`subject_user_id`) REFERENCES `auth_user` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT `ck_auth_audit_outcome` CHECK (outcome IN ('SUCCESS','FAILURE','DENIED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='安全审计事实';
