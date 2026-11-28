@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onUnmounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   AuthApiError,
@@ -10,8 +10,11 @@ import {
 } from '@/api/auth'
 import PasswordField from '@/components/auth/PasswordField.vue'
 import { passwordLengthHint, validateNewPassword } from '@/components/auth/formValidation'
+import { safeRedirect } from '@/router/redirect'
 
+const route = useRoute()
 const router = useRouter()
+const redirect = safeRedirect(route.query.redirect)
 
 const emailFields = reactive<AuthRequest<'registrationChallenge'>>({ email: '' })
 const fields = reactive<Omit<AuthRequest<'register'>, 'challengeId'>>({
@@ -91,7 +94,7 @@ async function sendCode() {
     startCountdown(receipt.resendAfter)
     step.value = 'details'
     await focusDetails()
-    notice.value = '如果该邮箱可用，验证码已发送。请在本机 Mailpit 收件箱查看。'
+    notice.value = '如果该邮箱可用，验证码已发送。请检查邮箱收件箱（包括垃圾邮件）。'
   } catch (error) {
     showError(error)
   } finally {
@@ -169,7 +172,10 @@ async function submitRegistration() {
     confirmation.value = ''
     notice.value = '注册成功，请登录。'
     window.setTimeout(() => {
-      void router.push({ name: 'login' })
+      void router.push({
+        name: 'login',
+        query: { registered: '1', ...(redirect ? { redirect } : {}) },
+      })
     }, 1200)
   } catch (error) {
     showError(error)
@@ -220,7 +226,7 @@ async function submitRegistration() {
     @input="clearFeedback"
   >
     <p class="auth-hint">
-      验证码已发送至 {{ challengeEmail }}。若未收到，请在本机 Mailpit 收件箱查看。
+      验证码已发送至 {{ challengeEmail }}。请检查收件箱（包括垃圾邮件）。
     </p>
     <div class="auth-field">
       <label for="register-code">邮箱验证码</label>
@@ -275,7 +281,7 @@ async function submitRegistration() {
   </form>
 
   <div class="auth-links">
-    <RouterLink :to="{ name: 'login' }">返回登录</RouterLink>
+    <RouterLink :to="{ name: 'login', query: redirect ? { redirect } : {} }">返回登录</RouterLink>
     <template v-if="step === 'details'">
       <button
         class="auth-text-button"

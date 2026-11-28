@@ -25,7 +25,7 @@
         VedioAI
       </RouterLink>
       <section class="auth-panel" aria-labelledby="auth-heading">
-        <p class="auth-preview">账号服务联调中 · 注册已接入，登录待接入</p>
+        <p class="auth-preview">账号服务已接入 · 登录、注册与密码找回可用</p>
         <RouterView />
       </section>
       <RouterLink class="auth-return" :to="{ name: 'media' }">返回素材库</RouterLink>

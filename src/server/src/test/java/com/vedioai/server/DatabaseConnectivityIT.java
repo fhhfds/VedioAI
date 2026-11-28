@@ -7,14 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
-
 import javax.sql.DataSource;
-
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
-@SpringBootTest
+
+@SpringBootTest(properties = {
+        "vedioai.auth.mail.delivery-mode=local-catcher",
+        "vedioai.auth.mail.dispatcher-enabled=false"
+})
 class DatabaseConnectivityIT {
 
     @Autowired

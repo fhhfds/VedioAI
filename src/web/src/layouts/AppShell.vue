@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+
+import { AuthApiError } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const links = [
   { to: 'media', label: '素材库' },
@@ -11,13 +14,41 @@ const links = [
 
 type Panel = 'tasks' | 'account'
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
 const activePanel = ref<Panel | null>(null)
 const actions = ref<HTMLElement>()
 const taskButton = ref<HTMLButtonElement>()
 const accountButton = ref<HTMLButtonElement>()
+const logoutError = ref('')
+const loggingOut = ref(false)
+
+const account = computed(() =>
+  auth.session.status === 'authenticated' ? auth.session.account.user : null,
+)
+const accountInitial = computed(() => account.value?.nickname.trim().charAt(0).toUpperCase() ?? '')
 
 function togglePanel(panel: Panel) {
+  logoutError.value = ''
   activePanel.value = activePanel.value === panel ? null : panel
+}
+
+async function signOut() {
+  if (loggingOut.value) return
+
+  logoutError.value = ''
+  loggingOut.value = true
+  try {
+    await auth.logout()
+    activePanel.value = null
+    await router.replace({ name: 'login' })
+  } catch (error) {
+    logoutError.value = error instanceof AuthApiError
+      ? error.message
+      : '退出登录失败，请稍后重试。'
+  } finally {
+    loggingOut.value = false
+  }
 }
 
 async function closeOnEscape(event: KeyboardEvent) {
@@ -36,6 +67,14 @@ function closeOnOutsideClick(event: PointerEvent) {
 }
 
 watch(() => route.fullPath, () => { activePanel.value = null })
+
+watch(() => auth.session.status, async (status) => {
+  if (status !== 'anonymous') return
+  activePanel.value = null
+  if (route.meta.requiresAuth) {
+    await router.replace({ name: 'login' })
+  }
+})
 
 onMounted(() => document.addEventListener('pointerdown', closeOnOutsideClick))
 onUnmounted(() => document.removeEventListener('pointerdown', closeOnOutsideClick))
@@ -106,15 +145,33 @@ onUnmounted(() => document.removeEventListener('pointerdown', closeOnOutsideClic
               aria-controls="account-panel"
               @click="togglePanel('account')"
             >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <span v-if="accountInitial" class="account-initial" aria-hidden="true">{{ accountInitial }}</span>
+              <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                 <circle cx="12" cy="8" r="3.2" />
                 <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke-linecap="round" />
               </svg>
             </button>
             <nav v-show="activePanel === 'account'" id="account-panel" class="popover account-panel" aria-label="账户">
-              <RouterLink :to="{ name: 'login' }" @click="activePanel = null">登录</RouterLink>
-              <RouterLink :to="{ name: 'register' }" @click="activePanel = null">注册</RouterLink>
-              <RouterLink :to="{ name: 'account-security' }" @click="activePanel = null">账户安全预览</RouterLink>
+              <template v-if="account">
+                <div class="account-identity">
+                  <strong>{{ account.nickname }}</strong>
+                  <span>{{ account.email }}</span>
+                </div>
+                <RouterLink :to="{ name: 'account-security' }" @click="activePanel = null">账户安全</RouterLink>
+                <RouterLink
+                  v-if="auth.hasRole('ADMIN')"
+                  :to="{ name: 'admin-users' }"
+                  @click="activePanel = null"
+                >账号管理</RouterLink>
+                <button class="account-signout" type="button" :disabled="loggingOut" @click="signOut">
+                  {{ loggingOut ? '退出中…' : '退出登录' }}
+                </button>
+                <p v-if="logoutError" class="account-error" role="alert">{{ logoutError }}</p>
+              </template>
+              <template v-else>
+                <RouterLink :to="{ name: 'login' }" @click="activePanel = null">登录</RouterLink>
+                <RouterLink :to="{ name: 'register' }" @click="activePanel = null">注册</RouterLink>
+              </template>
             </nav>
           </div>
         </div>
@@ -247,6 +304,12 @@ onUnmounted(() => document.removeEventListener('pointerdown', closeOnOutsideClic
   border-radius: 50%;
 }
 
+.account-initial {
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1;
+}
+
 .popover {
   position: absolute;
   top: calc(100% + 10px);
@@ -286,6 +349,59 @@ onUnmounted(() => document.removeEventListener('pointerdown', closeOnOutsideClic
 
 .account-panel a:hover {
   background: var(--accent-soft);
+}
+
+.account-identity {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 6px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.account-identity strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-signout {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--error);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+}
+
+.account-signout:hover {
+  background: var(--accent-soft);
+}
+
+.account-signout:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.account-error {
+  margin: 4px 6px 0;
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .content {

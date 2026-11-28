@@ -21,8 +21,8 @@ export const authEndpoints = {
   adminRoles: { method: 'PUT', path: '/api/admin/users/{userId}/roles', success: 200 },
 } as const
 
-type Role = 'USER' | 'ADMIN'
-type UserStatus = 'ACTIVE' | 'DISABLED'
+export type Role = 'USER' | 'ADMIN'
+export type UserStatus = 'ACTIVE' | 'DISABLED'
 
 export interface AuthPolicy {
   registrationEnabled: boolean
@@ -42,7 +42,7 @@ export interface ChallengeReceipt {
   resendAfter: number
 }
 
-interface AdminUser {
+export interface AdminUser {
   userId: string
   emailLabel: string
   nickname: string
@@ -67,7 +67,7 @@ export interface AuthState {
   }
 }
 
-interface SessionItem {
+export interface SessionItem {
   sessionId: string
   current: boolean
   createdAt: string
@@ -75,6 +75,13 @@ interface SessionItem {
   expiresAt: string
   userAgent: string
   ipLabel: string
+}
+
+export interface AdminUserPage {
+  items: AdminUser[]
+  page: number
+  pageSize: number
+  total: number
 }
 
 interface RequestBodies {
@@ -87,7 +94,7 @@ interface RequestBodies {
   profile: { nickname: string; expectedVersion: number }
   reauthenticate: { password: string }
   adminStatus: { status: UserStatus; expectedVersion: number }
-  adminRoles: { roles: ['USER'] | ['USER', 'ADMIN'] | ['ADMIN', 'USER']; expectedVersion: number }
+  adminRoles: { roles: Role[]; expectedVersion: number }
 }
 
 interface ResponseData {
@@ -101,7 +108,7 @@ interface ResponseData {
   sessions: { items: SessionItem[] }
   profile: AccountUser
   reauthenticate: { validUntil: string }
-  adminUsers: { items: AdminUser[]; page: number; pageSize: number; total: number }
+  adminUsers: AdminUserPage
   adminStatus: AdminUser
   adminRoles: AdminUser
 }
@@ -139,7 +146,7 @@ export class AuthApiError extends Error {
   }
 }
 
-async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers || {})
   if (!headers.has('Accept')) headers.set('Accept', 'application/json')
 
@@ -176,16 +183,16 @@ async function authRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
 }
 
 export function fetchAuthPolicy(): Promise<AuthPolicy> {
-  return authRequest<AuthPolicy>('/api/auth/policy')
+  return apiRequest<AuthPolicy>('/api/auth/policy')
 }
 
 export function fetchCsrf(): Promise<{ headerName: string; token: string }> {
-  return authRequest<{ headerName: string; token: string }>('/api/auth/csrf')
+  return apiRequest<{ headerName: string; token: string }>('/api/auth/csrf')
 }
 
 export async function requestRegistrationChallenge(email: string): Promise<ChallengeReceipt> {
   const csrf = await fetchCsrf()
-  return authRequest<ChallengeReceipt>('/api/auth/registration-challenges', {
+  return apiRequest<ChallengeReceipt>('/api/auth/registration-challenges', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -197,11 +204,153 @@ export async function requestRegistrationChallenge(email: string): Promise<Chall
 
 export async function registerAccount(input: RequestBodies['register']): Promise<AccountUser> {
   const csrf = await fetchCsrf()
-  return authRequest<AccountUser>('/api/auth/registrations', {
+  return apiRequest<AccountUser>('/api/auth/registrations', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       [csrf.headerName]: csrf.token,
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function loginAccount(input: RequestBodies['login']): Promise<AuthState> {
+  const csrf = await fetchCsrf()
+  return apiRequest<AuthState>('/api/auth/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [csrf.headerName]: csrf.token,
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export function fetchMe(): Promise<AuthState> {
+  return apiRequest<AuthState>('/api/auth/me')
+}
+
+export async function logoutAccount(): Promise<void> {
+  const csrf = await fetchCsrf()
+  await apiRequest<void>('/api/auth/logout', {
+    method: 'POST',
+    headers: {
+      [csrf.headerName]: csrf.token,
+    },
+  })
+}
+
+async function csrfHeaders(): Promise<Record<string, string>> {
+  const csrf = await fetchCsrf()
+  return { [csrf.headerName]: csrf.token }
+}
+
+export async function updateProfile(input: RequestBodies['profile']): Promise<AccountUser> {
+  return apiRequest<AccountUser>('/api/auth/profile', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function reauthenticate(password: string): Promise<{ validUntil: string }> {
+  return apiRequest<{ validUntil: string }>('/api/auth/reauthentication', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify({ password }),
+  })
+}
+
+export async function fetchSessions(): Promise<{ items: SessionItem[] }> {
+  return apiRequest<{ items: SessionItem[] }>('/api/auth/sessions')
+}
+
+export async function revokeSession(sessionId: string): Promise<void> {
+  await apiRequest<void>(`/api/auth/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: await csrfHeaders(),
+  })
+}
+
+export async function revokeAllSessions(): Promise<void> {
+  await apiRequest<void>('/api/auth/sessions/revoke-all', {
+    method: 'POST',
+    headers: await csrfHeaders(),
+  })
+}
+
+export async function changePassword(input: RequestBodies['changePassword']): Promise<void> {
+  await apiRequest<void>('/api/auth/password/change', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function requestPasswordResetChallenge(email: string): Promise<ChallengeReceipt> {
+  return apiRequest<ChallengeReceipt>('/api/auth/password-reset-challenges', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function resetPassword(input: RequestBodies['resetPassword']): Promise<void> {
+  await apiRequest<void>('/api/auth/password/resets', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function fetchAdminUsers(
+  page: number,
+  pageSize: number,
+  status?: UserStatus,
+): Promise<AdminUserPage> {
+  const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+  if (status) query.set('status', status)
+  return apiRequest<AdminUserPage>(`/api/admin/users?${query.toString()}`)
+}
+
+export async function changeAdminUserStatus(
+  userId: string,
+  input: RequestBodies['adminStatus'],
+): Promise<AdminUser> {
+  return apiRequest<AdminUser>(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
+    },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function changeAdminUserRoles(
+  userId: string,
+  input: RequestBodies['adminRoles'],
+): Promise<AdminUser> {
+  return apiRequest<AdminUser>(`/api/admin/users/${encodeURIComponent(userId)}/roles`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await csrfHeaders()),
     },
     body: JSON.stringify(input),
   })
